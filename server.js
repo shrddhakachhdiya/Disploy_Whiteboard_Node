@@ -18,6 +18,7 @@ const io = new Server(server, {
 })
 
 let imgURLGlobal, roomIdGlobal;
+console.log("🚀 ~ roomIdGlobal:", roomIdGlobal)
 
 io.on("connection", (socket) => {
     socket.on('user-joined', (userData) => {
@@ -58,9 +59,15 @@ io.on("connection", (socket) => {
     // })
     socket.on("disconnect", () => {
         const user = getUser(socket.id);
-        if (user && user.host) {
+        socket.broadcast.to(roomIdGlobal).emit("userLeftMessageBroadcasted", user)
+
+        if (user && user?.host) {
+            const UserCode = user?.id || roomIdGlobal
             axios.post('https://back.disploy.com/api/WhiteBoardMaster/RemoveWhiteBoardScreenCode', {
-                code: roomIdGlobal
+                code: UserCode
+            }).then((res) => {
+                console.log("🚀 ~ remove code res:", res?.data)
+
             }).catch(error => {
                 console.error('Error removing whiteboard screen code:', error);
             });
@@ -69,7 +76,6 @@ io.on("connection", (socket) => {
         if (user) {
             const users = removeUser(socket.id)
         }
-        socket.broadcast.to(roomIdGlobal).emit("userLeftMessageBroadcasted", user)
 
     })
 })
