@@ -91,6 +91,6 @@ app.get('/', (req, res) => {
 const port = process.env.port || 5000
 const host = "localhost"
 
-server.listen(port, host, () => {
-    console.log("server is listening")
+server.listen(port, () => {
+    console.log(`Server running on port ${port}`)
 })
