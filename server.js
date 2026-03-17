@@ -28,18 +28,20 @@ const server = http.createServer(app)
 
 //creating server instance for socket
 const io = new Server(server, {
+    // Allow larger payloads because whiteboard media is sent as base64 in socket events.
+    maxHttpBufferSize: 1e8,
     cors: {
         origin: ["http://localhost:5173", "http://localhost:5174", "https://disploy-whiteboard-react.vercel.app", "http://192.168.29.119:5173"],
         methods: ["GET", "POST"]
     }
 })
 
-let imgURLGlobal, roomIdGlobal;
+let imgURLGlobal;
 
 io.on("connection", (socket) => {
     socket.on('user-joined', (userData) => {
         const { name, id, userId, host, presenter } = userData
-        roomIdGlobal = id
+        socket.data.roomId = id
         socket.join(id)
         const users = addUser({ name, id, userId, host, presenter, socketId: socket.id })
 
@@ -65,18 +67,24 @@ io.on("connection", (socket) => {
 
     socket.on("colorChange", (data) => {
         const { color } = data;
-        socket.broadcast.to(roomIdGlobal).emit("colorChange", { color });
+        const roomId = socket.data.roomId || getUser(socket.id)?.id;
+        if (roomId) {
+            socket.broadcast.to(roomId).emit("colorChange", { color });
+        }
     });
 
     socket.on("WhiteboardElements", (data) => {
-        socket.broadcast.to(roomIdGlobal).emit("WhiteboardElements", { elements: data });
+        const roomId = socket.data.roomId || getUser(socket.id)?.id;
+        if (roomId) {
+            socket.broadcast.to(roomId).emit("WhiteboardElements", { elements: data });
+        }
     });
 
     socket.on('message', (data) => {
         const { message } = data
         const user = getUser(socket.id)
         if (user) {
-            socket.broadcast.to(roomIdGlobal).emit("messageResponse", { message, name: user.name })
+            socket.broadcast.to(user.id).emit("messageResponse", { message, name: user.name })
         }
     })
 
@@ -93,12 +101,17 @@ io.on("connection", (socket) => {
     //     socket.broadcast.to(roomIdGlobal).emit("userLeftMessageBroadcasted", user)
 
     // })
-    socket.on("disconnect", () => {
+    socket.on("disconnect", (reason) => {
         const user = getUser(socket.id);
-        socket.broadcast.to(roomIdGlobal).emit("userLeftMessageBroadcasted", user)
+        const roomId = user?.id || socket.data.roomId;
+        const isIntentionalDisconnect = reason === "client namespace disconnect" || reason === "server namespace disconnect";
 
-        if (user && user?.host) {
-            const UserCode = user?.id || roomIdGlobal
+        if (roomId) {
+            socket.broadcast.to(roomId).emit("userLeftMessageBroadcasted", user)
+        }
+
+        if (user && user?.host && isIntentionalDisconnect) {
+            const UserCode = user?.id || roomId
             const userMacIds = user?.macIds?.split(",") || []
 
             // Remove whiteboard screen code
@@ -114,7 +127,7 @@ io.on("connection", (socket) => {
             if (userMacIds.length > 0) {
                 userMacIds.forEach((macId) => {
                     const Params = {
-                        id: roomIdGlobal,
+                        id: roomId,
                         connection: true,
                         macId: macId,
                     };
@@ -123,9 +136,13 @@ io.on("connection", (socket) => {
             } else {
                 console.log("⚠️ No macIds found for host, skipping ScreenConnected emit")
             }
+        } else if (user?.host) {
+            console.log(`Skipping host cleanup for transient disconnect: ${reason}`)
         }
         if (user) {
-            const users = removeUser(socket.id)
+            removeUser(socket.id)
+            const updatedRoomUsers = getUsersInRoom(user.id)
+            socket.broadcast.to(user.id).emit("allUsers", updatedRoomUsers)
         }
 
     })
