@@ -80,6 +80,16 @@ io.on("connection", (socket) => {
         }
     });
 
+    socket.on("whiteboard-media-added", (data) => {
+        const roomId = data?.roomId || socket.data.roomId || getUser(socket.id)?.id;
+        if (roomId) {
+            socket.broadcast.to(roomId).emit("whiteboard-media-added", {
+                ...data,
+                roomId,
+            });
+        }
+    });
+
     socket.on('message', (data) => {
         const { message } = data
         const user = getUser(socket.id)
@@ -103,8 +113,16 @@ io.on("connection", (socket) => {
     // })
     socket.on("disconnect", (reason) => {
         const user = getUser(socket.id);
+        console.log("🚀 ~116 user:", user)
         const roomId = user?.id || socket.data.roomId;
-        const isIntentionalDisconnect = reason === "client namespace disconnect" || reason === "server namespace disconnect";
+        // const isIntentionalDisconnect = reason === "client namespace disconnect" || reason === "server namespace disconnect";
+        const isIntentionalDisconnect = [
+            "client namespace disconnect",
+            "server namespace disconnect",
+            "transport close",
+            "ping timeout",
+        ].includes(reason);
+        console.log("🚀 ~ isIntentionalDisconnect:", isIntentionalDisconnect)
 
         if (roomId) {
             socket.broadcast.to(roomId).emit("userLeftMessageBroadcasted", user)
@@ -113,6 +131,7 @@ io.on("connection", (socket) => {
         if (user && user?.host && isIntentionalDisconnect) {
             const UserCode = user?.id || roomId
             const userMacIds = user?.macIds?.split(",") || []
+            console.log("🚀 ~ userMacIds:", userMacIds)
 
             // Remove whiteboard screen code
             axios.post('https://back.disploy.com/api/WhiteBoardMaster/RemoveWhiteBoardScreenCode', {
