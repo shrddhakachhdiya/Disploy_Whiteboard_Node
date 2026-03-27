@@ -37,6 +37,54 @@ const io = new Server(server, {
 })
 
 let imgURLGlobal;
+const roomViewportStore = new Map();
+
+const getOrCreateViewportMap = (roomId) => {
+    if (!roomViewportStore.has(roomId)) {
+        roomViewportStore.set(roomId, new Map());
+    }
+
+    return roomViewportStore.get(roomId);
+};
+
+const emitRoomViewportSync = (roomId) => {
+    if (!roomId) return;
+
+    const viewportMap = roomViewportStore.get(roomId);
+    if (!viewportMap) {
+        io.to(roomId).emit("whiteboard-viewport-sync", {
+            roomId,
+            minWidth: null,
+            minHeight: null,
+            viewerCount: 0,
+        });
+        return;
+    }
+
+    const viewerViewports = Array.from(viewportMap.values()).filter((viewport) => {
+        return viewport?.isViewer && Number.isFinite(viewport?.width) && Number.isFinite(viewport?.height);
+    });
+
+    if (viewerViewports.length === 0) {
+        io.to(roomId).emit("whiteboard-viewport-sync", {
+            roomId,
+            minWidth: null,
+            minHeight: null,
+            viewerCount: 0,
+        });
+        return;
+    }
+
+    const minWidth = Math.min(...viewerViewports.map((viewport) => viewport.width));
+    const minHeight = Math.min(...viewerViewports.map((viewport) => viewport.height));
+
+    io.to(roomId).emit("whiteboard-viewport-sync", {
+        roomId,
+        minWidth,
+        minHeight,
+        viewerCount: viewerViewports.length,
+    });
+};
 
 io.on("connection", (socket) => {
     socket.on('user-joined', (userData) => {
@@ -63,7 +111,37 @@ io.on("connection", (socket) => {
         socket.emit('room-joined', { success: true, users: users.filter((user) => user.id === id) })
         socket.broadcast.to(id).emit("userJoinedMessageBroadcasted", name)
         socket.broadcast.to(id).emit("allUsers", users.filter((user) => user.id === id))
+
+        const roomViewportMap = getOrCreateViewportMap(id);
+        roomViewportMap.set(socket.id, {
+            width: null,
+            height: null,
+            isViewer: host !== true,
+        });
+        emitRoomViewportSync(id);
     })
+
+    socket.on("whiteboard-viewport", (data = {}) => {
+        const roomId = data?.roomId || socket.data.roomId || getUser(socket.id)?.id;
+        if (!roomId) return;
+
+        const width = Number(data?.width);
+        const height = Number(data?.height);
+        const isViewer = data?.isViewer !== false;
+
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+            return;
+        }
+
+        const roomViewportMap = getOrCreateViewportMap(roomId);
+        roomViewportMap.set(socket.id, {
+            width,
+            height,
+            isViewer,
+        });
+
+        emitRoomViewportSync(roomId);
+    });
 
     socket.on("colorChange", (data) => {
         const { color } = data;
@@ -124,8 +202,13 @@ io.on("connection", (socket) => {
         ].includes(reason);
         console.log("🚀 ~ isIntentionalDisconnect:", isIntentionalDisconnect)
 
-        if (roomId) {
-            socket.broadcast.to(roomId).emit("userLeftMessageBroadcasted", user)
+        if (roomId && user) {
+            const roomUsers = getUsersInRoom(roomId)
+            const editorUsers = roomUsers.filter((roomUser) => roomUser.host === true && roomUser.socketId !== socket.id)
+
+            editorUsers.forEach((editorUser) => {
+                io.to(editorUser.socketId).emit("userLeftMessageBroadcasted", user)
+            })
         }
 
         if (user && user?.host && isIntentionalDisconnect) {
@@ -162,6 +245,17 @@ io.on("connection", (socket) => {
             removeUser(socket.id)
             const updatedRoomUsers = getUsersInRoom(user.id)
             socket.broadcast.to(user.id).emit("allUsers", updatedRoomUsers)
+        }
+
+        if (roomId && roomViewportStore.has(roomId)) {
+            const roomViewportMap = roomViewportStore.get(roomId);
+            roomViewportMap.delete(socket.id);
+
+            if (roomViewportMap.size === 0) {
+                roomViewportStore.delete(roomId);
+            }
+
+            emitRoomViewportSync(roomId);
         }
 
     })
